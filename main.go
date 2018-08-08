@@ -116,6 +116,8 @@ apt-mark hold kubelet kubeadm kubectl
 sudo sudo
 bash\n` + joinCmd
 
+	fmt.Println(tmpl)
+
 	t := template.New("Master logs")
 	t, err := t.Parse(tmpl)
 	if err != nil {
@@ -127,15 +129,10 @@ bash\n` + joinCmd
 		return err
 	}
 	f, err := os.Create("provision.sh")
-
 	if err != nil {
 		return err
 	}
-	err = t.Execute(f, Token{JoinToken: joinCmd})
-
-	if err != nil {
-		return err
-	}
+	f.Write([]byte(tmpl))
 	f.Close()
 
 	_, err = vagrantUp()
