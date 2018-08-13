@@ -1,4 +1,4 @@
 **/*.log
-.vagrant
+**/.vagrant
 kubernetes-vagrant-provisioner
 .scannerwork

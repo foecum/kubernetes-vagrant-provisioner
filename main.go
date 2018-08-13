@@ -48,6 +48,7 @@ func main() {
 	if destroy {
 		err := destroyNodes(dir)
 		if err != nil {
+			log.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -82,23 +83,13 @@ func startMaster(pwd string) (string, error) {
 	return logs, nil
 }
 
-// Token for nodes to use to join cluster
-type Token struct {
-	JoinToken string
-}
-
 func destroyNodes(pwd string) error {
-	os.Chdir(pwd + "/kube-minions")
-	_, err := vagrantDestroy()
+	outStr, err := executeCmd("vagrant", "global-status", "|", "grep 'virtualbox'", "|",
+		"awk {'print $1'}", "|", "xargs vagrant destroy -f")
 	if err != nil {
 		return err
 	}
-
-	os.Chdir(pwd + "/kube-master")
-	_, err = vagrantDestroy()
-	if err != nil {
-		return err
-	}
+	fmt.Printf("%s\n", outStr)
 	return nil
 }
 
@@ -113,8 +104,9 @@ EOF
 sudo apt-get update
 sudo apt-get install -y kubelet kubeadm kubectl
 apt-mark hold kubelet kubeadm kubectl
-sudo sudo
-bash\n` + joinCmd
+sudo su
+bash
+` + joinCmd
 
 	fmt.Println(tmpl)
 
@@ -142,60 +134,11 @@ bash\n` + joinCmd
 	return nil
 }
 
-func vagrantDestroy() (string, error) {
-	cmd := exec.Command("vagrant", "destroy", "-f")
-	var stdout, stderr []byte
-	var errStdout, errStderr error
-	stdoutIn, _ := cmd.StdoutPipe()
-	stderrIn, _ := cmd.StderrPipe()
-	cmd.Start()
-
-	go func() {
-		stdout, errStdout = copyAndCapture(os.Stdout, stdoutIn)
-	}()
-
-	go func() {
-		stderr, errStderr = copyAndCapture(os.Stderr, stderrIn)
-	}()
-
-	err := cmd.Wait()
-	if err != nil {
-		return "", err
-	}
-	if errStdout != nil || errStderr != nil {
-		return "", fmt.Errorf("failed to capture stdout or stderr")
-	}
-	outStr, errStr := string(stdout), string(stderr)
-	log.Printf("%s", errStr)
-
-	return outStr, nil
-}
-
 func vagrantUp() (string, error) {
-	cmd := exec.Command("vagrant", "up")
-	var stdout, stderr []byte
-	var errStdout, errStderr error
-	stdoutIn, _ := cmd.StdoutPipe()
-	stderrIn, _ := cmd.StderrPipe()
-	cmd.Start()
-
-	go func() {
-		stdout, errStdout = copyAndCapture(os.Stdout, stdoutIn)
-	}()
-
-	go func() {
-		stderr, errStderr = copyAndCapture(os.Stderr, stderrIn)
-	}()
-
-	err := cmd.Wait()
+	outStr, err := executeCmd("vagrant", "up")
 	if err != nil {
 		return "", err
 	}
-	if errStdout != nil || errStderr != nil {
-		return "", fmt.Errorf("failed to capture stdout or stderr")
-	}
-	outStr, errStr := string(stdout), string(stderr)
-	log.Printf("%s", errStr)
 
 	return outStr, nil
 }
@@ -207,6 +150,30 @@ func getKubeClusterJoinToken(logs string) string {
 		token = match
 	}
 	return token
+}
+
+func getMasterIP(pwd string) (string, error) {
+	err := os.Chdir(pwd + "/kube-master")
+	if err != nil {
+		return "", nil
+	}
+	//ssh into the nodeand retrieve IP data
+	grep := `"ip address show enp0s8 | grep 'inet ' | sed -e 's/^.*inet //' -e 's/\/.*$//'"`
+	outStr, err := executeCmd("vagrant", fmt.Sprintf("ssh -c %s", grep))
+	if err != nil {
+		return "", err
+	}
+
+	// Retrieve IP address os master node
+	var re = regexp.MustCompile(`(?m)([0-9]+\.)+([0-9]+)`)
+	ip := ""
+	for _, match := range re.FindAllString(outStr, -1) {
+		if match != "127.0.0.1" {
+			ip = match
+		}
+	}
+
+	return ip, nil
 }
 
 func copyAndCapture(w io.Writer, r io.Reader) ([]byte, error) {
@@ -230,4 +197,40 @@ func copyAndCapture(w io.Writer, r io.Reader) ([]byte, error) {
 			return out, err
 		}
 	}
+}
+
+func executeCmd(cmdName string, argList ...string) (string, error) {
+	dir, err := os.Getwd()
+	log.Printf("%s, %v\n", dir, err)
+	log.Println("======================================================")
+	log.Printf("Running: %s, %v\n", cmdName, argList)
+	log.Println("======================================================")
+
+	cmd := exec.Command(cmdName, argList...)
+	var stdout, stderr []byte
+	var errStdout, errStderr error
+	stdoutIn, _ := cmd.StdoutPipe()
+	stderrIn, _ := cmd.StderrPipe()
+	err = cmd.Start()
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		stdout, errStdout = copyAndCapture(os.Stdout, stdoutIn)
+	}()
+
+	go func() {
+		stderr, errStderr = copyAndCapture(os.Stderr, stderrIn)
+	}()
+	log.Printf("Waiting on exec\n")
+	err = cmd.Wait()
+	if err != nil {
+		return "", err
+	}
+	if errStdout != nil || errStderr != nil {
+		return "", fmt.Errorf("failed to capture stdout or stderr")
+	}
+	outStr, errStr := string(stdout), string(stderr)
+	log.Printf("%s", errStr)
+	return outStr, nil
 }
